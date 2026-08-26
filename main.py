@@ -79,7 +79,7 @@ def verify_api_key(request: Request, key_header: str = Depends(api_key_header), 
 # ----------------- EXCEPTION HANDLERS -----------------
 @app.exception_handler(StarletteHTTPException)
 async def custom_http_exception_handler(request: Request, exc: StarletteHTTPException):
-    # Missing API Key ya Invalid Access pe yahi message jayega
+    # Missing API Key ya Invalid Access pe yahi strictly JSON message jayega
     if exc.status_code in [401, 403]:
         return JSONResponse(
             status_code=exc.status_code, 
@@ -111,6 +111,8 @@ def fetch_data(Number: str = Query(None), api_key: str = Depends(verify_api_key)
         return JSONResponse(status_code=400, content={"status": "rejected", "message": "Invalid parameter.", "Developer": "@Aswatthama_0x"})
     
     last_digit = Number[-1]
+    
+    # Hugging Face Buckets URL
     primary_url = f"https://huggingface.co/buckets/CutehackX/hitek-data-bucket/resolve/main/final_master_shard_{last_digit}.parquet"
     alt_url = f"https://huggingface.co/buckets/CutehackX/hitek-data-bucket/resolve/main/alt_master_shard_{last_digit}.parquet"
     
@@ -124,8 +126,11 @@ def fetch_data(Number: str = Query(None), api_key: str = Depends(verify_api_key)
             return JSONResponse(status_code=404, content={"status": "not_found", "phone": Number, "Developer": "@Aswatthama_0x"})
             
         return {"status": "success", "Data": {"Main_Records": main_records, "Alt_Records": alt_records}, "Developer": "@Aswatthama_0x"}
+    
     except Exception as e:
-        return JSONResponse(status_code=500, content={"status": "error", "message": "Data processing error", "Developer": "@Aswatthama_0x"})
+        # Ab agar DuckDB fail hoga toh console mein print karega aur response mein error reason aayega
+        print(f"DUCKDB CRASH LOG: {str(e)}")
+        return JSONResponse(status_code=500, content={"status": "error", "message": f"Data process error: {str(e)}", "Developer": "@Aswatthama_0x"})
 
 # ----------------- SECURE FORM LOGIN SYSTEM -----------------
 LOGIN_HTML = f"""
@@ -150,11 +155,11 @@ LOGIN_HTML = f"""
 
 @app.get(SECRET_ADMIN_PATH, response_class=HTMLResponse)
 def admin_dashboard(request: Request, admin_auth: str = Cookie(None)):
-    # Agar cookie nahi hai ya galat hai, toh login page dikhao
+    # Agar authentication galat hai toh form dikhayega
     if not admin_auth or admin_auth != ADMIN_HASH:
         return HTMLResponse(content=LOGIN_HTML)
     
-    # Agar cookie match ho gayi toh Dashboard HTML bhej do
+    # Secure Dashboard HTML
     html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -170,19 +175,19 @@ def admin_dashboard(request: Request, admin_auth: str = Cookie(None)):
                 <h1 class="text-3xl font-bold text-teal-400">NXD Security Dashboard</h1>
                 <div class="flex gap-4 items-center">
                     <span class="bg-teal-900 text-teal-300 px-3 py-1 rounded-full text-sm">Dev: @Aswatthama_0x</span>
-                    <a href="{SECRET_ADMIN_PATH}/logout" class="bg-red-600 hover:bg-red-500 px-4 py-2 rounded font-bold text-sm">Logout</a>
+                    <a href="{SECRET_ADMIN_PATH}/logout" class="bg-red-600 hover:bg-red-500 px-4 py-2 rounded font-bold text-sm transition-colors">Logout</a>
                 </div>
             </div>
             
             <div class="bg-gray-800 p-6 rounded-lg shadow-lg mb-8 border border-gray-700">
                 <h2 class="text-xl font-semibold mb-4 text-teal-300">Issue API Key</h2>
                 <div class="flex flex-wrap gap-4 items-center">
-                    <input type="text" id="clientName" placeholder="Client Name*" class="p-3 bg-gray-900 border border-gray-600 rounded w-1/4 text-white">
-                    <input type="text" id="customKey" placeholder="Custom API (Optional)" class="p-3 bg-gray-900 border border-gray-600 rounded w-1/4 text-white">
-                    <select id="daysValid" class="p-3 bg-gray-900 border border-gray-600 rounded text-white w-32">
+                    <input type="text" id="clientName" placeholder="Client Name*" class="p-3 bg-gray-900 border border-gray-600 rounded w-1/4 text-white focus:outline-none focus:border-teal-400">
+                    <input type="text" id="customKey" placeholder="Custom API (Optional)" class="p-3 bg-gray-900 border border-gray-600 rounded w-1/4 text-white focus:outline-none focus:border-teal-400">
+                    <select id="daysValid" class="p-3 bg-gray-900 border border-gray-600 rounded text-white w-32 focus:outline-none focus:border-teal-400">
                         <option value="7">7 Days</option><option value="30" selected>30 Days</option><option value="365">1 Year</option>
                     </select>
-                    <button onclick="createKey()" class="bg-teal-500 hover:bg-teal-400 text-gray-900 px-6 py-3 rounded font-bold">Generate NXD Key</button>
+                    <button onclick="createKey()" class="bg-teal-500 hover:bg-teal-400 text-gray-900 px-6 py-3 rounded font-bold transition-colors">Generate NXD Key</button>
                 </div>
                 <p id="newKeyDisplay" class="mt-4 text-green-400 font-mono font-bold"></p>
             </div>
@@ -215,16 +220,16 @@ def admin_dashboard(request: Request, admin_auth: str = Cookie(None)):
                     const statusClass = k.is_active ? 'text-green-400' : 'text-yellow-400';
                     const statusText = k.is_active ? 'Active' : 'Disabled';
                     html += `
-                    <tr class="border-b border-gray-700 hover:bg-gray-700">
+                    <tr class="border-b border-gray-700 hover:bg-gray-700 transition-colors">
                         <td class="py-4 font-semibold">${{k.client_name}}</td>
                         <td class="font-mono text-teal-200">${{k.api_key}}</td>
                         <td class="font-bold text-purple-400">${{k.usage_count || 0}} Hits</td>
                         <td class="text-gray-300">${{new Date(k.expires_at).toLocaleDateString()}}</td>
                         <td class="${{statusClass}} font-bold">${{statusText}}</td>
                         <td class="text-right space-x-2">
-                            <button onclick="toggleKey('${{k.api_key}}')" class="bg-gray-600 px-3 py-1 rounded text-xs text-white">Toggle</button>
-                            <button onclick="extendKey('${{k.api_key}}')" class="bg-blue-600 px-3 py-1 rounded text-xs text-white">+30 Days</button>
-                            <button onclick="deleteKey('${{k.api_key}}')" class="bg-red-600 px-3 py-1 rounded text-xs text-white">Delete</button>
+                            <button onclick="toggleKey('${{k.api_key}}')" class="bg-gray-600 hover:bg-gray-500 px-3 py-1 rounded text-xs text-white">Toggle</button>
+                            <button onclick="extendKey('${{k.api_key}}')" class="bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded text-xs text-white">+30 Days</button>
+                            <button onclick="deleteKey('${{k.api_key}}')" class="bg-red-600 hover:bg-red-500 px-3 py-1 rounded text-xs text-white">Delete</button>
                         </td>
                     </tr>`;
                 }});
@@ -256,24 +261,22 @@ def admin_dashboard(request: Request, admin_auth: str = Cookie(None)):
 
 @app.post(SECRET_ADMIN_PATH + "/login")
 def login(username: str = Form(...), password: str = Form(...)):
-    # ID password Render wale variables se check honge
+    # Render ke username aur password match check karna
     if username == ADMIN_USER and password == ADMIN_PASS:
-        # Successful login, set HttpOnly Cookie
         response = RedirectResponse(url=SECRET_ADMIN_PATH, status_code=303)
-        response.set_cookie(key="admin_auth", value=ADMIN_HASH, httponly=True, max_age=86400) # 24 Hours validity
+        # 1 day expiry cookie
+        response.set_cookie(key="admin_auth", value=ADMIN_HASH, httponly=True, max_age=86400)
         return response
     
-    # Galat password par wapas login page par bhej dega
     return HTMLResponse(content="<script>alert('Invalid Credentials!'); window.location.href='" + SECRET_ADMIN_PATH + "';</script>")
 
 @app.get(SECRET_ADMIN_PATH + "/logout")
 def logout():
-    # Logout button dabane par Cookie delete ho jayegi aur browser session bhool jayega
     response = RedirectResponse(url=SECRET_ADMIN_PATH, status_code=303)
     response.delete_cookie("admin_auth")
     return response
 
-# ----------------- ADMIN API MANAGEMENT LOGIC (Protected by Cookie) -----------------
+# ----------------- ADMIN API MANAGEMENT LOGIC -----------------
 @app.post(f"{SECRET_ADMIN_PATH}/api/keys")
 def create_api_key(client_name: str, days: int = 30, custom_key: str = None, is_admin: bool = Depends(verify_admin)):
     new_key = custom_key.strip() if custom_key else "NXD_" + secrets.token_hex(4)
