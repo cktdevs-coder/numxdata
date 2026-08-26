@@ -126,19 +126,34 @@ def fetch_data(Number: str = Query(None), api_key: str = Depends(verify_api_key)
     alt_url = f"https://huggingface.co/buckets/CutehackX/hitek-data-bucket/resolve/alt_master_shard_{last_digit}.parquet?download=true"
     
     try:
-        query = f"SELECT *, 'Main' AS _record_type FROM read_parquet('{primary_url}') WHERE mobile = '{Number}' UNION ALL SELECT *, 'Alt' AS _record_type FROM read_parquet('{alt_url}') WHERE alt = '{Number}'"
+        # Optimized query to fetch ALL matching records without limits, utilizing httpfs caching for speed
+        query = f"""
+            SELECT *, 'Main' AS _record_type FROM read_parquet('{primary_url}') WHERE mobile = '{Number}'
+            UNION ALL
+            SELECT *, 'Alt' AS _record_type FROM read_parquet('{alt_url}') WHERE alt = '{Number}'
+        """
         raw_results = con.execute(query).df().to_dict(orient="records")
         
-        # Clean NaN values to prevent JSON serialization errors
+        # Clean NaN values
         cleaned_results = clean_nan(raw_results)
         
+        # Group all matching rows into respective lists
         main_records = [row for row in cleaned_results if row.pop('_record_type') == 'Main']
         alt_records = [row for row in cleaned_results if row.pop('_record_type', None) == 'Alt']
         
         if not main_records and not alt_records:
             return JSONResponse(status_code=404, content={"status": "not_found", "phone": Number, "Developer": "@Aswatthama_0x"})
             
-        return {"status": "success", "Data": {"Main_Records": main_records, "Alt_Records": alt_records}, "Developer": "@Aswatthama_0x"}
+        return {
+            "status": "success", 
+            "Total_Main_Results": len(main_records),
+            "Total_Alt_Results": len(alt_records),
+            "Data": {
+                "Main_Records": main_records,
+                "Alt_Records": alt_records
+            },
+            "Developer": "@Aswatthama_0x"
+        }
     
     except Exception as e:
         print(f"DUCKDB CRASH LOG: {str(e)}")
