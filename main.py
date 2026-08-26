@@ -27,7 +27,7 @@ con = duckdb.connect()
 con.execute("INSTALL httpfs;")
 con.execute("LOAD httpfs;")
 
-# Security Dependancies
+# Security Dependencies
 security = HTTPBasic()
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 api_key_query = APIKeyQuery(name="api_key", auto_error=False)
@@ -133,9 +133,14 @@ async def custom_http_exception_handler(request: Request, exc: StarletteHTTPExce
                 "Developer": "@Aswatthama_0x"
             }
         )
+    
+    # Ye line login popup (WWW-Authenticate header) ko browser tak pahunchne degi
+    headers = getattr(exc, "headers", None)
+    
     return JSONResponse(
         status_code=exc.status_code,
-        content={"detail": exc.detail, "Developer": "@Aswatthama_0x"}
+        content={"detail": exc.detail, "Developer": "@Aswatthama_0x"},
+        headers=headers
     )
 
 # ----------------- PUBLIC ROUTES -----------------
@@ -157,7 +162,6 @@ def fetch_data(Number: str = Query(None), api_key: str = Depends(verify_api_key)
     
     last_digit = Number[-1]
     
-    # Updated Hugging Face Buckets URLs
     primary_url = f"https://huggingface.co/buckets/CutehackX/hitek-data-bucket/resolve/main/final_master_shard_{last_digit}.parquet"
     alt_url = f"https://huggingface.co/buckets/CutehackX/hitek-data-bucket/resolve/main/alt_master_shard_{last_digit}.parquet"
     
@@ -259,8 +263,9 @@ def admin_dashboard(admin: str = Depends(verify_admin)):
         </div>
         
         <script>
+            // Added credentials: 'same-origin' to all fetch requests to pass Basic Auth seamlessly
             async function fetchKeys() {
-                const res = await fetch('/admin/api/keys');
+                const res = await fetch('/admin/api/keys', { credentials: 'same-origin' });
                 const data = await res.json();
                 let html = '';
                 data.keys.forEach(k => {
@@ -290,7 +295,10 @@ def admin_dashboard(admin: str = Depends(verify_admin)):
                 const days = document.getElementById('daysValid').value;
                 if(!client) return alert('Please enter a client name.');
                 
-                const res = await fetch(`/admin/api/keys?client_name=${client}&days=${days}`, {method: 'POST'});
+                const res = await fetch(`/admin/api/keys?client_name=${client}&days=${days}`, {
+                    method: 'POST',
+                    credentials: 'same-origin'
+                });
                 const data = await res.json();
                 
                 document.getElementById('newKeyDisplay').innerText = `SUCCESS! Copy this key and send to client: ${data.api_key}`;
@@ -300,7 +308,10 @@ def admin_dashboard(admin: str = Depends(verify_admin)):
             
             async function toggleKey(key) {
                 if(confirm('Are you sure you want to change the status of this key?')) {
-                    await fetch(`/admin/api/keys/toggle?api_key=${key}`, {method: 'POST'});
+                    await fetch(`/admin/api/keys/toggle?api_key=${key}`, {
+                        method: 'POST',
+                        credentials: 'same-origin'
+                    });
                     fetchKeys();
                 }
             }
