@@ -2,3 +2,5 @@ fastapi
 uvicorn
 duckdb
 pandas
+pymongo
+python-dotenv
