@@ -1,11 +1,12 @@
-from fastapi import FastAPI, Query, Request, Depends, HTTPException, status
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials, APIKeyHeader, APIKeyQuery
+from fastapi import FastAPI, Query, Request, Depends, HTTPException, status, Cookie, Form, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.security import APIKeyHeader, APIKeyQuery
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from pymongo import MongoClient
 import duckdb
 import os
 import secrets
+import hashlib
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
@@ -15,7 +16,10 @@ MONGO_URI = os.getenv("MONGODB_URI")
 ADMIN_USER = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASSWORD", "admin123")
 
-# Set Your Hidden Admin Path Here (Do NOT use /admin)
+# Security Token Hash (Bina iske admin access nahi hoga)
+ADMIN_HASH = hashlib.sha256(f"{ADMIN_USER}:{ADMIN_PASS}".encode()).hexdigest()
+
+# Set Your Hidden Admin Path
 SECRET_ADMIN_PATH = "/nxd-secret-panel"
 
 # Initialize MongoDB
@@ -34,36 +38,33 @@ con.execute("INSTALL httpfs;")
 con.execute("LOAD httpfs;")
 
 # Security Dependencies
-security = HTTPBasic()
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 api_key_query = APIKeyQuery(name="api_key", auto_error=False)
 
-def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
-    if credentials.username != ADMIN_USER or credentials.password != ADMIN_PASS:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-    return credentials.username
+# Cookie Based Admin Auth (100% Secure, No Auto-Login)
+def verify_admin(admin_auth: str = Cookie(None)):
+    if not admin_auth or admin_auth != ADMIN_HASH:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return True
 
+# API Key Validation
 def verify_api_key(request: Request, key_header: str = Depends(api_key_header), key_query: str = Depends(api_key_query)):
     api_key = key_header or key_query
     if not api_key:
-        raise HTTPException(status_code=403, detail="API Key is missing")
+        raise HTTPException(status_code=401, detail="API is missing")
     
     key_data = keys_collection.find_one({"api_key": api_key})
     if not key_data:
-        raise HTTPException(status_code=403, detail="Invalid API Key")
+        raise HTTPException(status_code=401, detail="Invalid API Key")
     
     if not key_data.get("is_active"):
-        raise HTTPException(status_code=403, detail="API Key has been revoked")
+        raise HTTPException(status_code=401, detail="API Key has been revoked")
         
     if datetime.utcnow() > key_data.get("expires_at"):
         keys_collection.update_one({"api_key": api_key}, {"$set": {"is_active": False}})
-        raise HTTPException(status_code=403, detail="API Key has expired")
+        raise HTTPException(status_code=401, detail="API Key has expired")
     
-    # Track Usage & Logs Dynamically
+    # Track Usage & Logs
     keys_collection.update_one({"api_key": api_key}, {"$inc": {"usage_count": 1}})
     logs_collection.insert_one({
         "client_name": key_data["client_name"],
@@ -75,60 +76,34 @@ def verify_api_key(request: Request, key_header: str = Depends(api_key_header), 
     
     return api_key
 
-# ----------------- HTML TEMPLATES -----------------
-
-LANDING_PAGE_HTML = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Hitek Data Gateway - LIVE</title>
-    <style>
-        body { margin: 0; overflow: hidden; background-color: #050505; color: #00ffcc; font-family: 'Courier New', Courier, monospace; }
-        #canvas-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: -1; }
-        .overlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; background: rgba(10, 10, 10, 0.85); padding: 50px; border: 1px solid #00ffcc; border-radius: 12px; box-shadow: 0 0 30px rgba(0, 255, 204, 0.3); backdrop-filter: blur(5px); }
-        h1 { margin: 0 0 15px 0; font-size: 3.5em; text-transform: uppercase; letter-spacing: 6px; text-shadow: 0 0 15px #00ffcc; }
-        p { font-size: 1.2em; margin: 8px 0; color: #ccc; }
-        .highlight { color: #00ffcc; font-weight: bold; }
-        .status-box { margin-top: 30px; font-weight: bold; padding: 15px; border-radius: 8px; background: rgba(0, 255, 204, 0.1); border: 1px solid rgba(0, 255, 204, 0.5); font-size: 1.1em; }
-        .blinking { animation: blinker 1.5s linear infinite; display: inline-block; }
-        @keyframes blinker { 50% { opacity: 0; } }
-    </style>
-</head>
-<body>
-    <div id="canvas-container"></div>
-    <div class="overlay">
-        <h1>SYSTEM ONLINE</h1>
-        <p>API Gateway is <span class="highlight">Active & Secured</span></p>
-        <div class="status-box"><span class="blinking" style="color: #00ffcc;">●</span> HTTP 200 OK - LISTENING FOR QUERIES</div>
-    </div>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script>
-        const scene = new THREE.Scene(); const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000); const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true }); renderer.setSize(window.innerWidth, window.innerHeight); document.getElementById('canvas-container').appendChild(renderer.domElement);
-        const geometry = new THREE.BufferGeometry(); const vertices = [];
-        for (let i = 0; i < 8000; i++) { vertices.push(THREE.MathUtils.randFloatSpread(3000), THREE.MathUtils.randFloatSpread(3000), THREE.MathUtils.randFloatSpread(3000)); }
-        geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3)); const material = new THREE.PointsMaterial({ color: 0x00ffcc, size: 2.5, transparent: true, opacity: 0.8 }); const points = new THREE.Points(geometry, material); scene.add(points); camera.position.z = 1200;
-        function animate() { requestAnimationFrame(animate); points.rotation.x += 0.0005; points.rotation.y += 0.001; renderer.render(scene, camera); } animate();
-    </script>
-</body></html>
-"""
-
 # ----------------- EXCEPTION HANDLERS -----------------
 @app.exception_handler(StarletteHTTPException)
 async def custom_http_exception_handler(request: Request, exc: StarletteHTTPException):
-    if exc.status_code == 404:
-        return JSONResponse(status_code=404, content={"status": "rejected", "message": "Invalid endpoint.", "Developer": "@Aswatthama_0x"})
-    
-    headers = getattr(exc, "headers", None)
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail, "Developer": "@Aswatthama_0x"}, headers=headers)
+    # Missing API Key ya Invalid Access pe yahi message jayega
+    if exc.status_code in [401, 403]:
+        return JSONResponse(
+            status_code=exc.status_code, 
+            content={
+                "status": "error",
+                "message": "API Key is missing or invalid.",
+                "Developer": "@Aswatthama_0x",
+                "Buy_API": "Contact on Telegram: https://t.me/Aswatthama_0x"
+            }
+        )
+    return JSONResponse(
+        status_code=exc.status_code, 
+        content={"status": "rejected", "message": exc.detail, "Developer": "@Aswatthama_0x"}
+    )
 
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    return JSONResponse(status_code=500, content={"status": "error", "detail": "Server Crash / Error", "Developer": "@Aswatthama_0x"})
-
-# ----------------- PUBLIC ROUTES -----------------
-@app.get("/", response_class=HTMLResponse)
+# ----------------- PUBLIC ROUTES (NO HTML) -----------------
+@app.get("/", response_class=JSONResponse)
 def root_landing_page():
-    return HTMLResponse(content=LANDING_PAGE_HTML, status_code=200)
+    return {
+        "status": "Api is running",
+        "message": "numXdata api is running",
+        "Developer": "@Aswatthama_0x",
+        "Buy_API": "Contact on Telegram: https://t.me/Aswatthama_0x"
+    }
 
 @app.get("/FetchData")
 def fetch_data(Number: str = Query(None), api_key: str = Depends(verify_api_key)):
@@ -150,13 +125,36 @@ def fetch_data(Number: str = Query(None), api_key: str = Depends(verify_api_key)
             
         return {"status": "success", "Data": {"Main_Records": main_records, "Alt_Records": alt_records}, "Developer": "@Aswatthama_0x"}
     except Exception as e:
-        return JSONResponse(status_code=500, content={"status": "error", "message": f"Data process error", "Developer": "@Aswatthama_0x"})
+        return JSONResponse(status_code=500, content={"status": "error", "message": "Data processing error", "Developer": "@Aswatthama_0x"})
 
-# ----------------- HIDDEN PRO ADMIN DASHBOARD -----------------
+# ----------------- SECURE FORM LOGIN SYSTEM -----------------
+LOGIN_HTML = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"><title>NXD Security Login</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 h-screen flex items-center justify-center">
+    <div class="bg-gray-800 p-8 rounded-lg shadow-xl border border-teal-500 w-96">
+        <h2 class="text-2xl font-bold text-teal-400 mb-6 text-center">NXD Admin Access</h2>
+        <form action="{SECRET_ADMIN_PATH}/login" method="POST" class="flex flex-col gap-4">
+            <input type="text" name="username" placeholder="Username" class="p-3 bg-gray-900 text-white rounded border border-gray-600 focus:border-teal-400 focus:outline-none" required>
+            <input type="password" name="password" placeholder="Password" class="p-3 bg-gray-900 text-white rounded border border-gray-600 focus:border-teal-400 focus:outline-none" required>
+            <button type="submit" class="bg-teal-500 hover:bg-teal-400 text-gray-900 font-bold py-3 rounded mt-2">Login to Dashboard</button>
+        </form>
+    </div>
+</body>
+</html>
+"""
+
 @app.get(SECRET_ADMIN_PATH, response_class=HTMLResponse)
-def admin_dashboard(request: Request, admin: str = Depends(verify_admin)):
-    auth_header = request.headers.get("Authorization", "")
+def admin_dashboard(request: Request, admin_auth: str = Cookie(None)):
+    # Agar cookie nahi hai ya galat hai, toh login page dikhao
+    if not admin_auth or admin_auth != ADMIN_HASH:
+        return HTMLResponse(content=LOGIN_HTML)
     
+    # Agar cookie match ho gayi toh Dashboard HTML bhej do
     html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -170,36 +168,32 @@ def admin_dashboard(request: Request, admin: str = Depends(verify_admin)):
         <div class="max-w-7xl mx-auto">
             <div class="flex justify-between items-center border-b border-teal-500 pb-4 mb-8">
                 <h1 class="text-3xl font-bold text-teal-400">NXD Security Dashboard</h1>
-                <span class="bg-teal-900 text-teal-300 px-3 py-1 rounded-full text-sm">Developer: @Aswatthama_0x</span>
+                <div class="flex gap-4 items-center">
+                    <span class="bg-teal-900 text-teal-300 px-3 py-1 rounded-full text-sm">Dev: @Aswatthama_0x</span>
+                    <a href="{SECRET_ADMIN_PATH}/logout" class="bg-red-600 hover:bg-red-500 px-4 py-2 rounded font-bold text-sm">Logout</a>
+                </div>
             </div>
             
             <div class="bg-gray-800 p-6 rounded-lg shadow-lg mb-8 border border-gray-700">
-                <h2 class="text-xl font-semibold mb-4 text-teal-300">Issue API Key (Short & Custom)</h2>
+                <h2 class="text-xl font-semibold mb-4 text-teal-300">Issue API Key</h2>
                 <div class="flex flex-wrap gap-4 items-center">
-                    <input type="text" id="clientName" placeholder="Client Name*" class="p-3 bg-gray-900 border border-gray-600 rounded w-1/4 text-white focus:outline-none focus:border-teal-400">
-                    <input type="text" id="customKey" placeholder="Custom API (Optional)" class="p-3 bg-gray-900 border border-gray-600 rounded w-1/4 text-white focus:outline-none focus:border-teal-400">
-                    <select id="daysValid" class="p-3 bg-gray-900 border border-gray-600 rounded text-white w-32 focus:outline-none focus:border-teal-400">
-                        <option value="7">7 Days</option>
-                        <option value="30" selected>30 Days</option>
-                        <option value="365">1 Year</option>
+                    <input type="text" id="clientName" placeholder="Client Name*" class="p-3 bg-gray-900 border border-gray-600 rounded w-1/4 text-white">
+                    <input type="text" id="customKey" placeholder="Custom API (Optional)" class="p-3 bg-gray-900 border border-gray-600 rounded w-1/4 text-white">
+                    <select id="daysValid" class="p-3 bg-gray-900 border border-gray-600 rounded text-white w-32">
+                        <option value="7">7 Days</option><option value="30" selected>30 Days</option><option value="365">1 Year</option>
                     </select>
-                    <button onclick="createKey()" class="bg-teal-500 hover:bg-teal-400 text-gray-900 px-6 py-3 rounded font-bold transition-colors shadow-lg">Generate NXD Key</button>
+                    <button onclick="createKey()" class="bg-teal-500 hover:bg-teal-400 text-gray-900 px-6 py-3 rounded font-bold">Generate NXD Key</button>
                 </div>
                 <p id="newKeyDisplay" class="mt-4 text-green-400 font-mono font-bold"></p>
             </div>
 
             <div class="bg-gray-800 p-6 rounded-lg shadow-lg border border-gray-700">
-                <h2 class="text-xl font-semibold mb-4 text-teal-300">Live API Management & Logs</h2>
                 <div class="overflow-x-auto">
                     <table class="w-full text-left table-auto">
                         <thead>
                             <tr class="text-gray-400 border-b border-gray-600 text-sm uppercase">
-                                <th class="pb-3">Client</th>
-                                <th class="pb-3">API Key</th>
-                                <th class="pb-3">Usage (Hits)</th>
-                                <th class="pb-3">Expires At</th>
-                                <th class="pb-3">Status</th>
-                                <th class="pb-3 text-right">Actions</th>
+                                <th class="pb-3">Client</th><th class="pb-3">API Key</th><th class="pb-3">Usage</th>
+                                <th class="pb-3">Expires At</th><th class="pb-3">Status</th><th class="pb-3 text-right">Actions</th>
                             </tr>
                         </thead>
                         <tbody id="keysTable"></tbody>
@@ -209,76 +203,49 @@ def admin_dashboard(request: Request, admin: str = Depends(verify_admin)):
         </div>
         
         <script>
-            const authHeader = "{auth_header}";
             const adminPath = "{SECRET_ADMIN_PATH}";
             
             async function fetchKeys() {{
-                try {{
-                    const res = await fetch(adminPath + '/api/keys', {{ headers: {{ 'Authorization': authHeader }} }});
-                    const data = await res.json();
-                    
-                    let html = '';
-                    data.keys.forEach(k => {{
-                        const statusClass = k.is_active ? 'text-green-400' : 'text-yellow-400';
-                        const statusText = k.is_active ? 'Active' : 'Disabled';
-                        const usage = k.usage_count || 0;
-                        
-                        html += `
-                        <tr class="border-b border-gray-700 hover:bg-gray-700 transition-colors">
-                            <td class="py-4 font-semibold">${{k.client_name}}</td>
-                            <td class="font-mono text-teal-200">${{k.api_key}}</td>
-                            <td class="font-bold text-purple-400">${{usage}} Hits</td>
-                            <td class="text-gray-300">${{new Date(k.expires_at).toLocaleDateString()}}</td>
-                            <td class="${{statusClass}} font-bold">${{statusText}}</td>
-                            <td class="text-right space-x-2">
-                                <button onclick="toggleKey('${{k.api_key}}')" class="bg-gray-600 hover:bg-gray-500 px-3 py-1 rounded text-xs text-white">Toggle</button>
-                                <button onclick="extendKey('${{k.api_key}}')" class="bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded text-xs text-white">Extend 30D</button>
-                                <button onclick="deleteKey('${{k.api_key}}')" class="bg-red-600 hover:bg-red-500 px-3 py-1 rounded text-xs text-white">Delete</button>
-                            </td>
-                        </tr>`;
-                    }});
-                    document.getElementById('keysTable').innerHTML = html;
-                }} catch (e) {{
-                    document.getElementById('keysTable').innerHTML = `<tr><td colspan="6" class="text-red-400 text-center py-4 font-bold border border-red-500">System Error: Check MongoDB Connection</td></tr>`;
-                }}
+                const res = await fetch(adminPath + '/api/keys');
+                if(res.status === 401) window.location.reload();
+                const data = await res.json();
+                
+                let html = '';
+                data.keys.forEach(k => {{
+                    const statusClass = k.is_active ? 'text-green-400' : 'text-yellow-400';
+                    const statusText = k.is_active ? 'Active' : 'Disabled';
+                    html += `
+                    <tr class="border-b border-gray-700 hover:bg-gray-700">
+                        <td class="py-4 font-semibold">${{k.client_name}}</td>
+                        <td class="font-mono text-teal-200">${{k.api_key}}</td>
+                        <td class="font-bold text-purple-400">${{k.usage_count || 0}} Hits</td>
+                        <td class="text-gray-300">${{new Date(k.expires_at).toLocaleDateString()}}</td>
+                        <td class="${{statusClass}} font-bold">${{statusText}}</td>
+                        <td class="text-right space-x-2">
+                            <button onclick="toggleKey('${{k.api_key}}')" class="bg-gray-600 px-3 py-1 rounded text-xs text-white">Toggle</button>
+                            <button onclick="extendKey('${{k.api_key}}')" class="bg-blue-600 px-3 py-1 rounded text-xs text-white">+30 Days</button>
+                            <button onclick="deleteKey('${{k.api_key}}')" class="bg-red-600 px-3 py-1 rounded text-xs text-white">Delete</button>
+                        </td>
+                    </tr>`;
+                }});
+                document.getElementById('keysTable').innerHTML = html;
             }}
             
             async function createKey() {{
                 const client = document.getElementById('clientName').value;
                 const custom = document.getElementById('customKey').value;
                 const days = document.getElementById('daysValid').value;
-                if(!client) return alert('Please enter Client Name.');
+                if(!client) return alert('Enter Client Name');
                 
-                try {{
-                    const res = await fetch(`${{adminPath}}/api/keys?client_name=${{client}}&days=${{days}}&custom_key=${{custom}}`, {{
-                        method: 'POST', headers: {{ 'Authorization': authHeader }}
-                    }});
-                    const data = await res.json();
-                    document.getElementById('newKeyDisplay').innerText = `SUCCESS! Key Generated: ${{data.api_key}}`;
-                    document.getElementById('clientName').value = '';
-                    document.getElementById('customKey').value = '';
-                    fetchKeys();
-                }} catch (e) {{ alert("Error Generating Key"); }}
-            }}
-            
-            async function toggleKey(key) {{
-                await fetch(`${{adminPath}}/api/keys/toggle?api_key=${{key}}`, {{ method: 'POST', headers: {{ 'Authorization': authHeader }} }});
+                const res = await fetch(`${{adminPath}}/api/keys?client_name=${{client}}&days=${{days}}&custom_key=${{custom}}`, {{method: 'POST'}});
+                const data = await res.json();
+                document.getElementById('newKeyDisplay').innerText = `SUCCESS! Key: ${{data.api_key}}`;
                 fetchKeys();
             }}
-
-            async function extendKey(key) {{
-                if(confirm('Extend validity by 30 days?')) {{
-                    await fetch(`${{adminPath}}/api/keys/extend?api_key=${{key}}&days=30`, {{ method: 'POST', headers: {{ 'Authorization': authHeader }} }});
-                    fetchKeys();
-                }}
-            }}
-
-            async function deleteKey(key) {{
-                if(confirm('WARNING: Are you sure you want to PERMANENTLY delete this API Key?')) {{
-                    await fetch(`${{adminPath}}/api/keys/delete?api_key=${{key}}`, {{ method: 'DELETE', headers: {{ 'Authorization': authHeader }} }});
-                    fetchKeys();
-                }}
-            }}
+            
+            async function toggleKey(key) {{ await fetch(`${{adminPath}}/api/keys/toggle?api_key=${{key}}`, {{method: 'POST'}}); fetchKeys(); }}
+            async function extendKey(key) {{ if(confirm('Extend 30 days?')) {{ await fetch(`${{adminPath}}/api/keys/extend?api_key=${{key}}&days=30`, {{method: 'POST'}}); fetchKeys(); }} }}
+            async function deleteKey(key) {{ if(confirm('Delete permanently?')) {{ await fetch(`${{adminPath}}/api/keys/delete?api_key=${{key}}`, {{method: 'DELETE'}}); fetchKeys(); }} }}
             
             fetchKeys();
         </script>
@@ -287,57 +254,53 @@ def admin_dashboard(request: Request, admin: str = Depends(verify_admin)):
     """
     return HTMLResponse(content=html_content)
 
-# ----------------- ADMIN API MANAGEMENT LOGIC -----------------
-@app.post(f"{SECRET_ADMIN_PATH}/api/keys")
-def create_api_key(client_name: str, days: int = 30, custom_key: str = None, admin: str = Depends(verify_admin)):
-    try:
-        # Check if custom key exists, else generate short NXD_ key (e.g. NXD_a1b2c3d4)
-        new_key = custom_key.strip() if custom_key else "NXD_" + secrets.token_hex(4)
-        
-        # Prevent duplicate keys
-        if keys_collection.find_one({"api_key": new_key}):
-            raise HTTPException(status_code=400, detail="Custom Key already exists!")
+@app.post(SECRET_ADMIN_PATH + "/login")
+def login(username: str = Form(...), password: str = Form(...)):
+    # ID password Render wale variables se check honge
+    if username == ADMIN_USER and password == ADMIN_PASS:
+        # Successful login, set HttpOnly Cookie
+        response = RedirectResponse(url=SECRET_ADMIN_PATH, status_code=303)
+        response.set_cookie(key="admin_auth", value=ADMIN_HASH, httponly=True, max_age=86400) # 24 Hours validity
+        return response
+    
+    # Galat password par wapas login page par bhej dega
+    return HTMLResponse(content="<script>alert('Invalid Credentials!'); window.location.href='" + SECRET_ADMIN_PATH + "';</script>")
 
-        expires = datetime.utcnow() + timedelta(days=days)
-        keys_collection.insert_one({
-            "client_name": client_name,
-            "api_key": new_key,
-            "created_at": datetime.utcnow(),
-            "expires_at": expires,
-            "is_active": True,
-            "usage_count": 0
-        })
-        return {"status": "success", "api_key": new_key}
-    except Exception as e:
-        if isinstance(e, HTTPException): raise e
-        raise HTTPException(status_code=500, detail="Database save failed")
+@app.get(SECRET_ADMIN_PATH + "/logout")
+def logout():
+    # Logout button dabane par Cookie delete ho jayegi aur browser session bhool jayega
+    response = RedirectResponse(url=SECRET_ADMIN_PATH, status_code=303)
+    response.delete_cookie("admin_auth")
+    return response
+
+# ----------------- ADMIN API MANAGEMENT LOGIC (Protected by Cookie) -----------------
+@app.post(f"{SECRET_ADMIN_PATH}/api/keys")
+def create_api_key(client_name: str, days: int = 30, custom_key: str = None, is_admin: bool = Depends(verify_admin)):
+    new_key = custom_key.strip() if custom_key else "NXD_" + secrets.token_hex(4)
+    if keys_collection.find_one({"api_key": new_key}): raise HTTPException(status_code=400, detail="Custom Key already exists!")
+    keys_collection.insert_one({"client_name": client_name, "api_key": new_key, "created_at": datetime.utcnow(), "expires_at": datetime.utcnow() + timedelta(days=days), "is_active": True, "usage_count": 0})
+    return {"status": "success", "api_key": new_key}
 
 @app.get(f"{SECRET_ADMIN_PATH}/api/keys")
-def list_api_keys(admin: str = Depends(verify_admin)):
+def list_api_keys(is_admin: bool = Depends(verify_admin)):
     keys = list(keys_collection.find({}, {"_id": 0}).sort("created_at", -1))
     return {"keys": keys}
 
 @app.post(f"{SECRET_ADMIN_PATH}/api/keys/toggle")
-def toggle_api_key(api_key: str, admin: str = Depends(verify_admin)):
+def toggle_api_key(api_key: str, is_admin: bool = Depends(verify_admin)):
     key_data = keys_collection.find_one({"api_key": api_key})
-    if key_data:
-        keys_collection.update_one({"api_key": api_key}, {"$set": {"is_active": not key_data["is_active"]}})
-        return {"status": "success"}
-    raise HTTPException(status_code=404, detail="Key not found")
+    if key_data: keys_collection.update_one({"api_key": api_key}, {"$set": {"is_active": not key_data["is_active"]}})
+    return {"status": "success"}
 
 @app.post(f"{SECRET_ADMIN_PATH}/api/keys/extend")
-def extend_api_key(api_key: str, days: int = 30, admin: str = Depends(verify_admin)):
+def extend_api_key(api_key: str, days: int = 30, is_admin: bool = Depends(verify_admin)):
     key_data = keys_collection.find_one({"api_key": api_key})
-    if key_data:
-        new_expiry = key_data["expires_at"] + timedelta(days=days)
-        keys_collection.update_one({"api_key": api_key}, {"$set": {"expires_at": new_expiry}})
-        return {"status": "success"}
-    raise HTTPException(status_code=404, detail="Key not found")
+    if key_data: keys_collection.update_one({"api_key": api_key}, {"$set": {"expires_at": key_data["expires_at"] + timedelta(days=days)}})
+    return {"status": "success"}
 
 @app.delete(f"{SECRET_ADMIN_PATH}/api/keys/delete")
-def delete_api_key(api_key: str, admin: str = Depends(verify_admin)):
-    result = keys_collection.delete_one({"api_key": api_key})
-    if result.deleted_count > 0:
-        logs_collection.delete_many({"api_key": api_key}) # Delete logs for clean DB
+def delete_api_key(api_key: str, is_admin: bool = Depends(verify_admin)):
+    if keys_collection.delete_one({"api_key": api_key}).deleted_count > 0:
+        logs_collection.delete_many({"api_key": api_key})
         return {"status": "deleted"}
     raise HTTPException(status_code=404, detail="Key not found")
