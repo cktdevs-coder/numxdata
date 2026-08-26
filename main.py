@@ -16,13 +16,16 @@ ADMIN_USER = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASSWORD", "admin123")
 
 # Initialize MongoDB
-mongo_client = MongoClient(MONGO_URI)
-db = mongo_client["hitek_gateway"]
-keys_collection = db["api_keys"]
-logs_collection = db["api_logs"]
+try:
+    mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+    db = mongo_client["hitek_gateway"]
+    keys_collection = db["api_keys"]
+    logs_collection = db["api_logs"]
+except Exception as e:
+    print(f"MongoDB Connection Error: {e}")
 
 # Initialize FastAPI & DuckDB
-app = FastAPI(docs_url=None, redoc_url=None) # Docs disabled for security
+app = FastAPI(docs_url=None, redoc_url=None) 
 con = duckdb.connect()
 con.execute("INSTALL httpfs;")
 con.execute("LOAD httpfs;")
@@ -121,27 +124,18 @@ LANDING_PAGE_HTML = """
 </html>
 """
 
-# ----------------- EXCEPTION HANDLER -----------------
+# ----------------- EXCEPTION HANDLERS -----------------
 @app.exception_handler(StarletteHTTPException)
 async def custom_http_exception_handler(request: Request, exc: StarletteHTTPException):
     if exc.status_code == 404:
-        return JSONResponse(
-            status_code=404,
-            content={
-                "status": "rejected",
-                "message": "Invalid endpoint. STRICTLY use /FetchData?Number=XXXXXXXXXX",
-                "Developer": "@Aswatthama_0x"
-            }
-        )
+        return JSONResponse(status_code=404, content={"status": "rejected", "message": "Invalid endpoint.", "Developer": "@Aswatthama_0x"})
     
-    # Ye line login popup (WWW-Authenticate header) ko browser tak pahunchne degi
     headers = getattr(exc, "headers", None)
-    
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"detail": exc.detail, "Developer": "@Aswatthama_0x"},
-        headers=headers
-    )
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail, "Developer": "@Aswatthama_0x"}, headers=headers)
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(status_code=500, content={"status": "error", "detail": "Server Crash / MongoDB Issue", "Developer": "@Aswatthama_0x"})
 
 # ----------------- PUBLIC ROUTES -----------------
 @app.get("/", response_class=HTMLResponse)
@@ -151,70 +145,31 @@ def root_landing_page():
 @app.get("/FetchData")
 def fetch_data(Number: str = Query(None), api_key: str = Depends(verify_api_key)):
     if not Number or not Number.isdigit() or len(Number) < 10 or len(Number) > 15:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "status": "rejected",
-                "message": "Invalid parameter. STRICTLY use /FetchData?Number=XXXXXXXXXX",
-                "Developer": "@Aswatthama_0x"
-            }
-        )
+        return JSONResponse(status_code=400, content={"status": "rejected", "message": "Invalid parameter. STRICTLY use /FetchData?Number=XXXXXXXXXX", "Developer": "@Aswatthama_0x"})
     
     last_digit = Number[-1]
-    
     primary_url = f"https://huggingface.co/buckets/CutehackX/hitek-data-bucket/resolve/main/final_master_shard_{last_digit}.parquet"
     alt_url = f"https://huggingface.co/buckets/CutehackX/hitek-data-bucket/resolve/main/alt_master_shard_{last_digit}.parquet"
     
     try:
-        query = f"""
-            SELECT *, 'Main' AS _record_type FROM read_parquet('{primary_url}') WHERE mobile = '{Number}'
-            UNION ALL
-            SELECT *, 'Alt' AS _record_type FROM read_parquet('{alt_url}') WHERE alt = '{Number}'
-        """
+        query = f"SELECT *, 'Main' AS _record_type FROM read_parquet('{primary_url}') WHERE mobile = '{Number}' UNION ALL SELECT *, 'Alt' AS _record_type FROM read_parquet('{alt_url}') WHERE alt = '{Number}'"
         raw_results = con.execute(query).df().to_dict(orient="records")
-        
-        main_records = []
-        alt_records = []
-        
-        for row in raw_results:
-            rec_type = row.pop('_record_type')
-            if rec_type == 'Main':
-                main_records.append(row)
-            else:
-                alt_records.append(row)
+        main_records = [row for row in raw_results if row.pop('_record_type') == 'Main']
+        alt_records = [row for row in raw_results if row.pop('_record_type', None) == 'Alt']
         
         if not main_records and not alt_records:
-            return JSONResponse(
-                status_code=404,
-                content={
-                    "status": "not_found", 
-                    "phone": Number,
-                    "Developer": "@Aswatthama_0x"
-                }
-            )
+            return JSONResponse(status_code=404, content={"status": "not_found", "phone": Number, "Developer": "@Aswatthama_0x"})
             
-        return {
-            "status": "success", 
-            "Data": {
-                "Main_Records": main_records,
-                "Alt_Records": alt_records
-            },
-            "Developer": "@Aswatthama_0x"
-        }
-        
+        return {"status": "success", "Data": {"Main_Records": main_records, "Alt_Records": alt_records}, "Developer": "@Aswatthama_0x"}
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={
-                "status": "error",
-                "message": f"Database processing error: {str(e)}",
-                "Developer": "@Aswatthama_0x"
-            }
-        )
+        return JSONResponse(status_code=500, content={"status": "error", "message": f"Database processing error: {str(e)}", "Developer": "@Aswatthama_0x"})
 
 # ----------------- PRO ADMIN DASHBOARD (HTML + TAILWIND) -----------------
 @app.get("/admin", response_class=HTMLResponse)
-def admin_dashboard(admin: str = Depends(verify_admin)):
+def admin_dashboard(request: Request, admin: str = Depends(verify_admin)):
+    # 100% Foolproof method: Capturing the valid auth header from browser and passing it directly to JavaScript
+    auth_header = request.headers.get("Authorization", "")
+    
     html_content = """
     <!DOCTYPE html>
     <html lang="en">
@@ -263,31 +218,41 @@ def admin_dashboard(admin: str = Depends(verify_admin)):
         </div>
         
         <script>
-            // Added credentials: 'same-origin' to all fetch requests to pass Basic Auth seamlessly
+            // Master Auth Header provided by Python Backend dynamically
+            const authHeader = "__AUTH_HEADER_TOKEN__";
+            
             async function fetchKeys() {
-                const res = await fetch('/admin/api/keys', { credentials: 'same-origin' });
-                const data = await res.json();
-                let html = '';
-                data.keys.forEach(k => {
-                    const statusClass = k.is_active ? 'text-green-400' : 'text-red-400';
-                    const statusText = k.is_active ? 'Active' : 'Revoked';
-                    const btnClass = k.is_active ? 'bg-red-500 hover:bg-red-400 text-white' : 'bg-green-500 hover:bg-green-400 text-gray-900';
-                    const btnText = k.is_active ? 'Revoke Access' : 'Activate Access';
+                try {
+                    const res = await fetch('/admin/api/keys', { headers: { 'Authorization': authHeader } });
+                    const data = await res.json();
                     
-                    html += `
-                    <tr class="border-b border-gray-700 hover:bg-gray-700 transition-colors">
-                        <td class="py-4 font-semibold">${k.client_name}</td>
-                        <td class="font-mono text-gray-300">${k.api_key.substring(0,10)}...</td>
-                        <td class="text-gray-300">${new Date(k.expires_at).toLocaleDateString()}</td>
-                        <td class="${statusClass} font-bold">${statusText}</td>
-                        <td>
-                            <button onclick="toggleKey('${k.api_key}')" class="${btnClass} px-4 py-2 rounded text-sm font-bold transition-colors">
-                                ${btnText}
-                            </button>
-                        </td>
-                    </tr>`;
-                });
-                document.getElementById('keysTable').innerHTML = html;
+                    if (!res.ok) throw new Error(data.detail || "Database Error");
+                    
+                    let html = '';
+                    data.keys.forEach(k => {
+                        const statusClass = k.is_active ? 'text-green-400' : 'text-red-400';
+                        const statusText = k.is_active ? 'Active' : 'Revoked';
+                        const btnClass = k.is_active ? 'bg-red-500 hover:bg-red-400 text-white' : 'bg-green-500 hover:bg-green-400 text-gray-900';
+                        const btnText = k.is_active ? 'Revoke Access' : 'Activate Access';
+                        
+                        html += `
+                        <tr class="border-b border-gray-700 hover:bg-gray-700 transition-colors">
+                            <td class="py-4 font-semibold">${k.client_name}</td>
+                            <td class="font-mono text-gray-300">${k.api_key.substring(0,10)}...</td>
+                            <td class="text-gray-300">${new Date(k.expires_at).toLocaleDateString()}</td>
+                            <td class="${statusClass} font-bold">${statusText}</td>
+                            <td>
+                                <button onclick="toggleKey('${k.api_key}')" class="${btnClass} px-4 py-2 rounded text-sm font-bold transition-colors">
+                                    ${btnText}
+                                </button>
+                            </td>
+                        </tr>`;
+                    });
+                    document.getElementById('keysTable').innerHTML = html;
+                } catch (e) {
+                    console.error(e);
+                    document.getElementById('keysTable').innerHTML = `<tr><td colspan="5" class="text-red-400 text-center py-4 font-bold border border-red-500">System Error: Make sure MongoDB is connected (${e.message})</td></tr>`;
+                }
             }
             
             async function createKey() {
@@ -295,24 +260,35 @@ def admin_dashboard(admin: str = Depends(verify_admin)):
                 const days = document.getElementById('daysValid').value;
                 if(!client) return alert('Please enter a client name.');
                 
-                const res = await fetch(`/admin/api/keys?client_name=${client}&days=${days}`, {
-                    method: 'POST',
-                    credentials: 'same-origin'
-                });
-                const data = await res.json();
-                
-                document.getElementById('newKeyDisplay').innerText = `SUCCESS! Copy this key and send to client: ${data.api_key}`;
-                document.getElementById('clientName').value = '';
-                fetchKeys();
+                try {
+                    const res = await fetch(`/admin/api/keys?client_name=${client}&days=${days}`, {
+                        method: 'POST',
+                        headers: { 'Authorization': authHeader }
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.detail || "Generation Error");
+                    
+                    document.getElementById('newKeyDisplay').innerText = `SUCCESS! Copy this key and send to client: ${data.api_key}`;
+                    document.getElementById('clientName').value = '';
+                    fetchKeys();
+                } catch (e) {
+                    alert("Error: " + e.message);
+                }
             }
             
             async function toggleKey(key) {
                 if(confirm('Are you sure you want to change the status of this key?')) {
-                    await fetch(`/admin/api/keys/toggle?api_key=${key}`, {
-                        method: 'POST',
-                        credentials: 'same-origin'
-                    });
-                    fetchKeys();
+                    try {
+                        const res = await fetch(`/admin/api/keys/toggle?api_key=${key}`, {
+                            method: 'POST',
+                            headers: { 'Authorization': authHeader }
+                        });
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || "Toggle Error");
+                        fetchKeys();
+                    } catch (e) {
+                        alert("Error: " + e.message);
+                    }
                 }
             }
             
@@ -321,32 +297,43 @@ def admin_dashboard(admin: str = Depends(verify_admin)):
     </body>
     </html>
     """
+    html_content = html_content.replace("__AUTH_HEADER_TOKEN__", auth_header)
     return HTMLResponse(content=html_content)
 
 # ----------------- ADMIN LOGIC API -----------------
 @app.post("/admin/api/keys")
 def create_api_key(client_name: str, days: int = 30, admin: str = Depends(verify_admin)):
-    new_key = "hitek_" + secrets.token_hex(20)
-    expires = datetime.utcnow() + timedelta(days=days)
-    keys_collection.insert_one({
-        "client_name": client_name,
-        "api_key": new_key,
-        "created_at": datetime.utcnow(),
-        "expires_at": expires,
-        "is_active": True
-    })
-    return {"status": "success", "client_name": client_name, "api_key": new_key, "expires_at": expires}
+    try:
+        new_key = "hitek_" + secrets.token_hex(20)
+        expires = datetime.utcnow() + timedelta(days=days)
+        keys_collection.insert_one({
+            "client_name": client_name,
+            "api_key": new_key,
+            "created_at": datetime.utcnow(),
+            "expires_at": expires,
+            "is_active": True
+        })
+        return {"status": "success", "client_name": client_name, "api_key": new_key, "expires_at": expires}
+    except Exception:
+        raise HTTPException(status_code=500, detail="Database save failed")
 
 @app.get("/admin/api/keys")
 def list_api_keys(admin: str = Depends(verify_admin)):
-    keys = list(keys_collection.find({}, {"_id": 0}).sort("created_at", -1))
-    return {"keys": keys}
+    try:
+        keys = list(keys_collection.find({}, {"_id": 0}).sort("created_at", -1))
+        return {"keys": keys}
+    except Exception:
+        raise HTTPException(status_code=500, detail="Database fetch failed")
 
 @app.post("/admin/api/keys/toggle")
 def toggle_api_key(api_key: str, admin: str = Depends(verify_admin)):
-    key_data = keys_collection.find_one({"api_key": api_key})
-    if key_data:
-        new_status = not key_data["is_active"]
-        keys_collection.update_one({"api_key": api_key}, {"$set": {"is_active": new_status}})
-        return {"status": "success", "new_status": new_status}
-    raise HTTPException(status_code=404, detail="Key not found")
+    try:
+        key_data = keys_collection.find_one({"api_key": api_key})
+        if key_data:
+            new_status = not key_data["is_active"]
+            keys_collection.update_one({"api_key": api_key}, {"$set": {"is_active": new_status}})
+            return {"status": "success", "new_status": new_status}
+        raise HTTPException(status_code=404, detail="Key not found")
+    except Exception as e:
+        if isinstance(e, HTTPException): raise e
+        raise HTTPException(status_code=500, detail="Database update failed")
