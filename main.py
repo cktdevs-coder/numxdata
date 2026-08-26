@@ -7,6 +7,7 @@ import duckdb
 import os
 import secrets
 import hashlib
+import math
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
@@ -16,7 +17,7 @@ MONGO_URI = os.getenv("MONGODB_URI")
 ADMIN_USER = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASSWORD", "admin123")
 
-# Security Token Hash (Bina iske admin access nahi hoga)
+# Security Token Hash
 ADMIN_HASH = hashlib.sha256(f"{ADMIN_USER}:{ADMIN_PASS}".encode()).hexdigest()
 
 # Set Your Hidden Admin Path
@@ -41,7 +42,17 @@ con.execute("LOAD httpfs;")
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 api_key_query = APIKeyQuery(name="api_key", auto_error=False)
 
-# Cookie Based Admin Auth (100% Secure, No Auto-Login)
+# Helper function to clean NaN values for JSON compliance
+def clean_nan(obj):
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    elif isinstance(obj, dict):
+        return {k: clean_nan(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [clean_nan(v) for v in obj]
+    return obj
+
+# Cookie Based Admin Auth
 def verify_admin(admin_auth: str = Cookie(None)):
     if not admin_auth or admin_auth != ADMIN_HASH:
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -79,7 +90,6 @@ def verify_api_key(request: Request, key_header: str = Depends(api_key_header), 
 # ----------------- EXCEPTION HANDLERS -----------------
 @app.exception_handler(StarletteHTTPException)
 async def custom_http_exception_handler(request: Request, exc: StarletteHTTPException):
-    # Missing API Key ya Invalid Access pe yahi strictly JSON message jayega
     if exc.status_code in [401, 403]:
         return JSONResponse(
             status_code=exc.status_code, 
@@ -112,17 +122,18 @@ def fetch_data(Number: str = Query(None), api_key: str = Depends(verify_api_key)
     
     last_digit = Number[-1]
     
-    # -------------------------------------------------------------
-    # FIXED URLS: Ab exactly aapki di hui download link ka pattern hai
-    # -------------------------------------------------------------
     primary_url = f"https://huggingface.co/buckets/CutehackX/hitek-data-bucket/resolve/final_master_shard_{last_digit}.parquet?download=true"
     alt_url = f"https://huggingface.co/buckets/CutehackX/hitek-data-bucket/resolve/alt_master_shard_{last_digit}.parquet?download=true"
     
     try:
         query = f"SELECT *, 'Main' AS _record_type FROM read_parquet('{primary_url}') WHERE mobile = '{Number}' UNION ALL SELECT *, 'Alt' AS _record_type FROM read_parquet('{alt_url}') WHERE alt = '{Number}'"
         raw_results = con.execute(query).df().to_dict(orient="records")
-        main_records = [row for row in raw_results if row.pop('_record_type') == 'Main']
-        alt_records = [row for row in raw_results if row.pop('_record_type', None) == 'Alt']
+        
+        # Clean NaN values to prevent JSON serialization errors
+        cleaned_results = clean_nan(raw_results)
+        
+        main_records = [row for row in cleaned_results if row.pop('_record_type') == 'Main']
+        alt_records = [row for row in cleaned_results if row.pop('_record_type', None) == 'Alt']
         
         if not main_records and not alt_records:
             return JSONResponse(status_code=404, content={"status": "not_found", "phone": Number, "Developer": "@Aswatthama_0x"})
