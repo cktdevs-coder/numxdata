@@ -4,3 +4,4 @@ duckdb
 pandas
 pymongo
 python-dotenv
+python-multipart
