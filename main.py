@@ -112,9 +112,11 @@ def fetch_data(Number: str = Query(None), api_key: str = Depends(verify_api_key)
     
     last_digit = Number[-1]
     
-    # Hugging Face Buckets URL
-    primary_url = f"https://huggingface.co/buckets/CutehackX/hitek-data-bucket/resolve/main/final_master_shard_{last_digit}.parquet"
-    alt_url = f"https://huggingface.co/buckets/CutehackX/hitek-data-bucket/resolve/main/alt_master_shard_{last_digit}.parquet"
+    # -------------------------------------------------------------
+    # FIXED URLS: Ab exactly aapki di hui download link ka pattern hai
+    # -------------------------------------------------------------
+    primary_url = f"https://huggingface.co/buckets/CutehackX/hitek-data-bucket/resolve/final_master_shard_{last_digit}.parquet?download=true"
+    alt_url = f"https://huggingface.co/buckets/CutehackX/hitek-data-bucket/resolve/alt_master_shard_{last_digit}.parquet?download=true"
     
     try:
         query = f"SELECT *, 'Main' AS _record_type FROM read_parquet('{primary_url}') WHERE mobile = '{Number}' UNION ALL SELECT *, 'Alt' AS _record_type FROM read_parquet('{alt_url}') WHERE alt = '{Number}'"
@@ -128,7 +130,6 @@ def fetch_data(Number: str = Query(None), api_key: str = Depends(verify_api_key)
         return {"status": "success", "Data": {"Main_Records": main_records, "Alt_Records": alt_records}, "Developer": "@Aswatthama_0x"}
     
     except Exception as e:
-        # Ab agar DuckDB fail hoga toh console mein print karega aur response mein error reason aayega
         print(f"DUCKDB CRASH LOG: {str(e)}")
         return JSONResponse(status_code=500, content={"status": "error", "message": f"Data process error: {str(e)}", "Developer": "@Aswatthama_0x"})
 
@@ -155,11 +156,9 @@ LOGIN_HTML = f"""
 
 @app.get(SECRET_ADMIN_PATH, response_class=HTMLResponse)
 def admin_dashboard(request: Request, admin_auth: str = Cookie(None)):
-    # Agar authentication galat hai toh form dikhayega
     if not admin_auth or admin_auth != ADMIN_HASH:
         return HTMLResponse(content=LOGIN_HTML)
     
-    # Secure Dashboard HTML
     html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -261,10 +260,8 @@ def admin_dashboard(request: Request, admin_auth: str = Cookie(None)):
 
 @app.post(SECRET_ADMIN_PATH + "/login")
 def login(username: str = Form(...), password: str = Form(...)):
-    # Render ke username aur password match check karna
     if username == ADMIN_USER and password == ADMIN_PASS:
         response = RedirectResponse(url=SECRET_ADMIN_PATH, status_code=303)
-        # 1 day expiry cookie
         response.set_cookie(key="admin_auth", value=ADMIN_HASH, httponly=True, max_age=86400)
         return response
     
