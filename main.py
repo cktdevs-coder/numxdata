@@ -99,12 +99,12 @@ async def custom_http_exception_handler(request: Request, exc: StarletteHTTPExce
             content={
                 "status": "rejected",
                 "message": "Invalid endpoint. STRICTLY use /FetchData?Number=XXXXXXXXXX",
-                "Developer": "@Maybechx"
+                "Developer": "@Aswatthama_0x"
             }
         )
     return JSONResponse(
         status_code=exc.status_code,
-        content={"detail": exc.detail, "Developer": "@Maybechx"}
+        content={"detail": exc.detail, "Developer": "@Aswatthama_0x"}
     )
 
 @app.get("/", response_class=HTMLResponse)
@@ -119,7 +119,7 @@ def fetch_data(Number: str = Query(None)):
             content={
                 "status": "rejected",
                 "message": "Invalid parameter. STRICTLY use /FetchData?Number=XXXXXXXXXX",
-                "Developer": "@Maybechx"
+                "Developer": "@Aswatthama_0x"
             }
         )
     
@@ -153,7 +153,7 @@ def fetch_data(Number: str = Query(None)):
                 content={
                     "status": "not_found", 
                     "phone": Number,
-                    "Developer": "@Maybechx"
+                    "Developer": "@Aswatthama_0x"
                 }
             )
             
@@ -163,7 +163,7 @@ def fetch_data(Number: str = Query(None)):
                 "Main_Records": main_records,
                 "Alt_Records": alt_records
             },
-            "Developer": "@Maybechx"
+            "Developer": "@Aswatthama_0x"
         }
         
     except Exception as e:
@@ -172,6 +172,6 @@ def fetch_data(Number: str = Query(None)):
             content={
                 "status": "error",
                 "message": f"Database processing error: {str(e)}",
-                "Developer": "@Maybechx"
+                "Developer": "@Aswatthama_0x"
             }
         )
