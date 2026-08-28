@@ -122,11 +122,11 @@ def fetch_data(Number: str = Query(None), api_key: str = Depends(verify_api_key)
     
     last_digit = Number[-1]
     
-    primary_url = f"https://huggingface.co/buckets/CutehackX/hitek-data-bucket/resolve/final_master_shard_{last_digit}.parquet?download=true"
-    alt_url = f"https://huggingface.co/buckets/CutehackX/hitek-data-bucket/resolve/alt_master_shard_{last_digit}.parquet?download=true"
+    # Updated Hugging Face Bucket URLs with new repository link
+    primary_url = f"https://huggingface.co/buckets/ashwatthama0x/NumXdb_0x/resolve/final_master_shard_{last_digit}.parquet?download=true"
+    alt_url = f"https://huggingface.co/buckets/ashwatthama0x/NumXdb_0x/resolve/alt_master_shard_{last_digit}.parquet?download=true"
     
     try:
-        # Optimized query to fetch ALL matching records without limits, utilizing httpfs caching for speed
         query = f"""
             SELECT *, 'Main' AS _record_type FROM read_parquet('{primary_url}') WHERE mobile = '{Number}'
             UNION ALL
@@ -137,7 +137,6 @@ def fetch_data(Number: str = Query(None), api_key: str = Depends(verify_api_key)
         # Clean NaN values
         cleaned_results = clean_nan(raw_results)
         
-        # Group all matching rows into respective lists
         main_records = [row for row in cleaned_results if row.pop('_record_type') == 'Main']
         alt_records = [row for row in cleaned_results if row.pop('_record_type', None) == 'Alt']
         
